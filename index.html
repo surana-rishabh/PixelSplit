@@ -1,0 +1,1357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PixelSplit — Sprite Extractor</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ── Reset & Base ───────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:         #F8F5EE;
+  --surface:    #EDE8DC;
+  --surface2:   #E2DBD0;
+  --ink:        #2D2926;
+  --ink2:       #5A524A;
+  --accent:     #E8A020;
+  --accent2:    #C47B10;
+  --green:      #5E9E72;
+  --red:        #C45850;
+  --border:     #C8BEB0;
+  --border2:    #A89888;
+  --shadow:     rgba(45,41,38,.15);
+  --px: 2px;  /* pixel unit */
+}
+
+html { font-size: 14px; }
+
+body {
+  font-family: 'IBM Plex Mono', monospace;
+  background: var(--bg);
+  color: var(--ink);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Scanline texture overlay */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(45,41,38,.025) 2px,
+    rgba(45,41,38,.025) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── Typography ─────────────────────────────────────────── */
+.font-pixel  { font-family: 'Press Start 2P', monospace; }
+.font-mono   { font-family: 'IBM Plex Mono', monospace; }
+
+/* ── Layout ─────────────────────────────────────────────── */
+.app-wrap {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+}
+
+/* ── Pixel Box utility ──────────────────────────────────── */
+.pixel-box {
+  border: var(--px) solid var(--border2);
+  box-shadow: var(--px) var(--px) 0 var(--border2);
+  background: var(--surface);
+}
+.pixel-box-accent {
+  border: var(--px) solid var(--accent2);
+  box-shadow: var(--px) var(--px) 0 var(--accent2);
+  background: var(--surface);
+}
+
+/* ── Header ─────────────────────────────────────────────── */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  background: var(--ink);
+  margin-bottom: 20px;
+  position: relative;
+  overflow: hidden;
+}
+.app-header::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 4px;
+  background: repeating-linear-gradient(90deg, var(--accent) 0 8px, transparent 8px 16px);
+}
+.header-logo {
+  display: flex; align-items: center; gap: 12px;
+}
+.logo-icon {
+  width: 36px; height: 36px;
+  background: var(--accent);
+  display: grid;
+  grid-template-columns: repeat(5,1fr);
+  grid-template-rows: repeat(5,1fr);
+  gap: 1px;
+  padding: 3px;
+  animation: logo-blink 3s steps(1) infinite;
+}
+@keyframes logo-blink {
+  0%,88%  { opacity:1; }
+  90%     { opacity:.4; }
+  92%     { opacity:1; }
+  94%     { opacity:.4; }
+  96%,100%{ opacity:1; }
+}
+.logo-px { background: var(--ink); }
+.logo-px.lit { background: var(--surface); }
+
+.header-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 1rem;
+  color: var(--bg);
+  line-height: 1.4;
+  letter-spacing: 0.04em;
+}
+.header-title span {
+  color: var(--accent);
+}
+
+.settings-btn {
+  font-family: 'Press Start 2P', monospace;
+  font-size: .55rem;
+  background: var(--surface);
+  color: var(--ink);
+  border: var(--px) solid var(--border2);
+  box-shadow: var(--px) var(--px) 0 var(--border2);
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+  transition: transform .1s, box-shadow .1s;
+  white-space: nowrap;
+}
+.settings-btn:hover {
+  background: var(--accent);
+  color: var(--ink);
+  transform: translate(-1px,-1px);
+  box-shadow: 3px 3px 0 var(--accent2);
+}
+.settings-btn:active {
+  transform: translate(1px,1px);
+  box-shadow: none;
+}
+.settings-btn svg { width:14px; height:14px; flex-shrink:0; }
+.settings-pill {
+  font-size:.45rem;
+  background: var(--accent);
+  color: var(--ink);
+  padding: 2px 5px;
+  margin-left: 4px;
+  display: inline-block;
+}
+
+/* ── Drop Zone ──────────────────────────────────────────── */
+.drop-zone {
+  position: relative;
+  border: 3px dashed var(--border2);
+  background: var(--surface);
+  padding: 48px 32px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .2s, background .2s;
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+.drop-zone::before {
+  /* Corner markers */
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border: 2px solid transparent;
+  pointer-events: none;
+  transition: border-color .3s;
+}
+.drop-zone:hover::before,
+.drop-zone.drag-over::before {
+  border-color: var(--accent);
+  animation: corner-march .6s steps(1) infinite;
+}
+@keyframes corner-march {
+  0%   { clip-path: inset(0 0 calc(100% - 12px) 0), inset(calc(100% - 12px) 0 0 0); }
+  50%  { opacity: .5; }
+  100% { opacity: 1; }
+}
+.drop-zone:hover, .drop-zone.drag-over {
+  border-color: var(--accent);
+  background: #F0EAD8;
+}
+.drop-zone input[type=file] {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  opacity: 0; cursor: pointer;
+}
+.drop-icon {
+  width: 52px; height: 52px;
+  margin: 0 auto 16px;
+  color: var(--ink2);
+  animation: float 3s ease-in-out infinite;
+}
+@keyframes float {
+  0%,100% { transform: translateY(0); }
+  50%     { transform: translateY(-6px); }
+}
+.drop-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: .8rem;
+  color: var(--ink);
+  margin-bottom: 8px;
+  line-height: 1.6;
+}
+.drop-title span { color: var(--accent2); }
+.drop-sub {
+  font-size: .7rem;
+  color: var(--ink2);
+  margin-bottom: 12px;
+}
+.status-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .62rem;
+  color: var(--ink2);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  margin-top: 8px;
+}
+.status-bar::before {
+  content: '●';
+  color: var(--green);
+  animation: blink-dot 1.4s steps(1) infinite;
+}
+@keyframes blink-dot {
+  0%,45%  { opacity:1; }
+  50%,95% { opacity:0; }
+  100%    { opacity:1; }
+}
+
+/* Preview in drop zone */
+.preview-container { display: none; width: 100%; }
+.preview-images {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  justify-content: center; margin-bottom: 12px;
+}
+.preview-images img {
+  max-width: 120px; max-height: 120px;
+  border: 2px solid var(--border2);
+  object-fit: contain;
+}
+
+/* ── Loader ─────────────────────────────────────────────── */
+.loader-wrap {
+  display: none;
+  justify-content: center; align-items: center;
+  gap: 16px;
+  padding: 40px;
+}
+.pixel-loader {
+  display: grid;
+  grid-template-columns: repeat(5,10px);
+  grid-template-rows: repeat(5,10px);
+  gap: 2px;
+}
+.pixel-loader .cell {
+  background: var(--border);
+  animation: pixel-fill 1.5s steps(1) infinite;
+}
+.pixel-loader .cell:nth-child(1)  { animation-delay: 0s; }
+.pixel-loader .cell:nth-child(2)  { animation-delay: .06s; }
+.pixel-loader .cell:nth-child(3)  { animation-delay: .12s; }
+.pixel-loader .cell:nth-child(4)  { animation-delay: .18s; }
+.pixel-loader .cell:nth-child(5)  { animation-delay: .24s; }
+.pixel-loader .cell:nth-child(6)  { animation-delay: .3s; }
+.pixel-loader .cell:nth-child(7)  { animation-delay: .36s; }
+.pixel-loader .cell:nth-child(8)  { animation-delay: .42s; }
+.pixel-loader .cell:nth-child(9)  { animation-delay: .48s; }
+.pixel-loader .cell:nth-child(10) { animation-delay: .54s; }
+.pixel-loader .cell:nth-child(11) { animation-delay: .6s; }
+.pixel-loader .cell:nth-child(12) { animation-delay: .66s; }
+.pixel-loader .cell:nth-child(13) { animation-delay: .72s; }
+.pixel-loader .cell:nth-child(14) { animation-delay: .78s; }
+.pixel-loader .cell:nth-child(15) { animation-delay: .84s; }
+.pixel-loader .cell:nth-child(16) { animation-delay: .9s; }
+.pixel-loader .cell:nth-child(17) { animation-delay: .96s; }
+.pixel-loader .cell:nth-child(18) { animation-delay: 1.02s; }
+.pixel-loader .cell:nth-child(19) { animation-delay: 1.08s; }
+.pixel-loader .cell:nth-child(20) { animation-delay: 1.14s; }
+.pixel-loader .cell:nth-child(21) { animation-delay: 1.2s; }
+.pixel-loader .cell:nth-child(22) { animation-delay: 1.26s; }
+.pixel-loader .cell:nth-child(23) { animation-delay: 1.32s; }
+.pixel-loader .cell:nth-child(24) { animation-delay: 1.38s; }
+.pixel-loader .cell:nth-child(25) { animation-delay: 1.44s; }
+@keyframes pixel-fill {
+  0%,20%  { background: var(--border); }
+  25%,50% { background: var(--accent); }
+  55%,100%{ background: var(--border); }
+}
+.loader-label {
+  font-family: 'Press Start 2P', monospace;
+  font-size: .6rem;
+  color: var(--ink2);
+  animation: label-pulse 1s ease-in-out infinite;
+}
+@keyframes label-pulse {
+  0%,100% { opacity:.5; }
+  50%     { opacity:1; }
+}
+
+/* ── Output Section ─────────────────────────────────────── */
+.output-section { display: none; }
+.output-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-bottom: 16px;
+  margin-bottom: 20px;
+  border-bottom: 3px solid var(--ink);
+  position: relative;
+}
+.output-header::after {
+  content:'';
+  position: absolute;
+  bottom: -6px; left: 0; right: 0;
+  height: 3px;
+  background: repeating-linear-gradient(90deg, var(--accent) 0 6px, transparent 6px 12px);
+}
+.output-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: .85rem;
+  color: var(--ink);
+  display: flex; align-items: center; gap: 10px;
+}
+.count-badge {
+  font-size: .6rem;
+  background: var(--ink);
+  color: var(--accent);
+  padding: 4px 8px;
+  display: inline-block;
+  animation: badge-pop .3s steps(3) forwards;
+}
+@keyframes badge-pop {
+  from { transform: scale(0); opacity:0; }
+  to   { transform: scale(1); opacity:1; }
+}
+
+.action-buttons { display: none; gap: 10px; align-items: center; }
+.btn {
+  font-family: 'Press Start 2P', monospace;
+  font-size: .55rem;
+  border: var(--px) solid;
+  padding: 9px 14px;
+  cursor: pointer;
+  display: inline-flex; align-items: center; gap: 7px;
+  transition: transform .1s, box-shadow .1s;
+}
+.btn:hover  { transform: translate(-1px,-1px); }
+.btn:active { transform: translate(1px,1px); box-shadow: none !important; }
+.btn-primary {
+  background: var(--ink);
+  color: var(--accent);
+  border-color: var(--ink);
+  box-shadow: 3px 3px 0 var(--ink2);
+}
+.btn-primary:hover { box-shadow: 4px 4px 0 var(--ink2); }
+.btn svg { width:14px; height:14px; }
+
+/* ── Sprite Grid ─────────────────────────────────────────── */
+.sprite-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 12px;
+}
+
+.sprite-wrapper {
+  position: relative;
+  display: flex; justify-content: center; align-items: center;
+  padding: 10px;
+  aspect-ratio: 1;
+  border: 2px solid var(--border2);
+  box-shadow: 3px 3px 0 var(--border);
+  background-color: var(--surface2);
+  background-image:
+    linear-gradient(45deg, var(--surface) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--surface) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--surface) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--surface) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  cursor: pointer;
+  transition: transform .15s steps(2), box-shadow .15s steps(2);
+  opacity: 0;
+  animation: sprite-appear .3s steps(4) forwards;
+}
+@keyframes sprite-appear {
+  from { opacity:0; transform: scale(.7); }
+  to   { opacity:1; transform: scale(1); }
+}
+
+/* Pixel corner markers on hover */
+.sprite-wrapper::before,
+.sprite-wrapper::after {
+  content: '';
+  position: absolute;
+  width: 10px; height: 10px;
+  border-color: var(--accent);
+  border-style: solid;
+  opacity: 0;
+  transition: opacity .15s;
+}
+.sprite-wrapper::before {
+  top: 4px; left: 4px;
+  border-width: 2px 0 0 2px;
+}
+.sprite-wrapper::after {
+  bottom: 4px; right: 4px;
+  border-width: 0 2px 2px 0;
+}
+.sprite-wrapper:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 5px 5px 0 var(--accent2);
+  border-color: var(--accent2);
+}
+.sprite-wrapper:hover::before,
+.sprite-wrapper:hover::after {
+  opacity: 1;
+}
+
+.sprite-canvas { max-width:100%; max-height:100%; image-rendering: pixelated; }
+
+/* Per-sprite download */
+.dl-sprite-btn {
+  position: absolute;
+  top: 5px; right: 5px;
+  background: var(--ink);
+  color: var(--accent);
+  border: none;
+  width: 24px; height: 24px;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity .15s;
+  text-decoration: none;
+}
+.dl-sprite-btn svg { width:12px; height:12px; }
+.sprite-wrapper:hover .dl-sprite-btn { opacity:1; }
+.dl-sprite-btn:hover { background: var(--accent); color: var(--ink); }
+
+/* ── Settings Panel (Side Drawer) ───────────────────────── */
+.settings-overlay {
+  position: fixed; inset: 0;
+  background: rgba(45,41,38,.5);
+  z-index: 900;
+  display: none;
+  animation: fade-in .2s ease;
+}
+@keyframes fade-in { from { opacity:0; } to { opacity:1; } }
+.settings-overlay.active { display: block; }
+
+.settings-panel {
+  position: fixed;
+  top: 0; right: 0;
+  height: 100%;
+  width: min(400px, 95vw);
+  background: var(--bg);
+  border-left: 3px solid var(--ink);
+  box-shadow: -6px 0 0 var(--border2);
+  z-index: 901;
+  display: flex; flex-direction: column;
+  transform: translateX(100%);
+  transition: transform .25s steps(8);
+  overflow-y: auto;
+}
+.settings-panel.active { transform: translateX(0); }
+
+.settings-header {
+  background: var(--ink);
+  padding: 18px 20px;
+  display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0;
+  position: relative;
+}
+.settings-header::after {
+  content:'';
+  position: absolute; bottom:0; left:0; right:0; height:3px;
+  background: repeating-linear-gradient(90deg, var(--accent) 0 6px, transparent 6px 12px);
+}
+.settings-header h2 {
+  font-family: 'Press Start 2P', monospace;
+  font-size: .75rem;
+  color: var(--bg);
+  letter-spacing: .05em;
+}
+.close-panel-btn {
+  background: none; border: none;
+  color: var(--bg);
+  font-size: 1.4rem;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+  transition: color .15s;
+}
+.close-panel-btn:hover { color: var(--accent); }
+
+.settings-body { padding: 24px 20px; flex: 1; display: flex; flex-direction: column; gap: 28px; }
+
+/* Setting group */
+.setting-group {}
+.setting-label {
+  font-family: 'Press Start 2P', monospace;
+  font-size: .55rem;
+  color: var(--ink2);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  margin-bottom: 10px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.setting-value {
+  font-family: 'Press Start 2P', monospace;
+  font-size: .6rem;
+  color: var(--accent2);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+}
+.setting-hint {
+  font-size: .62rem;
+  color: var(--ink2);
+  margin-top: 6px;
+  line-height: 1.6;
+}
+
+/* Custom range slider */
+input[type=range] {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 8px;
+  background: var(--surface2);
+  border: 2px solid var(--border2);
+  outline: none;
+  cursor: pointer;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px; height: 18px;
+  background: var(--ink);
+  border: 2px solid var(--accent);
+  cursor: pointer;
+  transition: background .1s;
+}
+input[type=range]::-webkit-slider-thumb:hover { background: var(--accent); }
+input[type=range]::-moz-range-thumb {
+  width: 18px; height: 18px;
+  background: var(--ink);
+  border: 2px solid var(--accent);
+  cursor: pointer;
+  border-radius: 0;
+}
+.range-labels {
+  display: flex; justify-content: space-between;
+  font-size: .55rem; color: var(--ink2); margin-top: 4px;
+}
+
+/* Radio buttons */
+.radio-group { display: flex; flex-direction: column; gap: 8px; }
+.radio-option {
+  display: flex; align-items: center; gap: 10px;
+  cursor: pointer;
+  padding: 8px 10px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  transition: border-color .15s, background .15s;
+}
+.radio-option:hover { border-color: var(--accent2); background: #EDE0C8; }
+.radio-option input[type=radio] { accent-color: var(--accent2); width:14px; height:14px; cursor:pointer; }
+.radio-option span { font-size: .62rem; color: var(--ink); }
+
+/* Color section */
+.color-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.color-swatch {
+  width: 32px; height: 32px;
+  border: 2px solid var(--border2);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+input[type=color] {
+  width: 32px; height: 32px;
+  border: 2px solid var(--border2);
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.btn-sm {
+  font-family: 'Press Start 2P', monospace;
+  font-size: .5rem;
+  background: var(--surface2);
+  color: var(--ink);
+  border: 2px solid var(--border2);
+  box-shadow: 2px 2px 0 var(--border);
+  padding: 6px 10px;
+  cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+  transition: transform .1s;
+}
+.btn-sm:hover { background: var(--surface); border-color: var(--accent2); transform: translate(-1px,-1px); }
+.btn-sm svg { width:11px; height:11px; }
+
+/* Settings footer */
+.settings-footer {
+  padding: 16px 20px;
+  border-top: 2px solid var(--border);
+  display: flex; gap: 10px;
+  flex-shrink: 0;
+}
+.btn-cancel {
+  flex: 1;
+  font-family: 'Press Start 2P', monospace;
+  font-size: .55rem;
+  background: var(--surface);
+  color: var(--ink2);
+  border: 2px solid var(--border2);
+  box-shadow: 2px 2px 0 var(--border);
+  padding: 10px;
+  cursor: pointer;
+  transition: transform .1s;
+}
+.btn-cancel:hover { transform: translate(-1px,-1px); }
+.btn-apply {
+  flex: 2;
+  font-family: 'Press Start 2P', monospace;
+  font-size: .55rem;
+  background: var(--ink);
+  color: var(--accent);
+  border: 2px solid var(--ink);
+  box-shadow: 3px 3px 0 var(--ink2);
+  padding: 10px;
+  cursor: pointer;
+  transition: transform .1s, box-shadow .1s;
+}
+.btn-apply:hover { transform: translate(-1px,-1px); box-shadow: 4px 4px 0 var(--ink2); }
+
+/* ── Color Picker Modal ──────────────────────────────────── */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(45,41,38,.7);
+  z-index: 1000;
+  display: none;
+  align-items: center; justify-content: center;
+  padding: 20px;
+  animation: fade-in .15s ease;
+}
+.modal-overlay.active { display: flex; }
+.modal-box {
+  background: var(--bg);
+  border: 3px solid var(--ink);
+  box-shadow: 6px 6px 0 var(--ink2);
+  max-width: 700px;
+  width: 100%;
+  max-height: 90vh;
+  overflow: auto;
+}
+.modal-header {
+  background: var(--ink);
+  padding: 14px 18px;
+  display: flex; align-items: center; justify-content: space-between;
+  position: relative;
+}
+.modal-header::after {
+  content:'';
+  position: absolute; bottom:0; left:0; right:0; height:3px;
+  background: repeating-linear-gradient(90deg, var(--accent) 0 6px, transparent 6px 12px);
+}
+.modal-header h3 {
+  font-family: 'Press Start 2P', monospace;
+  font-size: .7rem;
+  color: var(--bg);
+}
+.modal-body { padding: 20px; }
+#color-picker-canvas {
+  max-width: 100%; max-height: 55vh;
+  cursor: crosshair;
+  border: 2px solid var(--border2);
+  display: block; margin: 0 auto 16px;
+}
+.modal-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 12px;
+}
+.picked-color-row { display: flex; align-items: center; gap: 8px; }
+.color-preview-box {
+  width: 32px; height: 32px;
+  border: 2px solid var(--border2);
+}
+.picked-hex {
+  font-family: 'Press Start 2P', monospace;
+  font-size: .6rem;
+  color: var(--accent2);
+}
+.modal-actions { display: flex; gap: 8px; }
+
+/* ── Utility ─────────────────────────────────────────────── */
+.hidden { display: none !important; }
+.warn-tag {
+  font-family: 'Press Start 2P', monospace;
+  font-size: .5rem;
+  color: var(--red);
+  background: #FDF0EE;
+  border: 1px solid var(--red);
+  padding: 4px 8px;
+  margin-top: 8px;
+  display: block;
+  line-height: 1.8;
+}
+
+/* ── Responsive ──────────────────────────────────────────── */
+@media(max-width:640px) {
+  .app-header { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .output-header { flex-direction: column; align-items: flex-start; }
+  .sprite-grid { grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); }
+}
+@media(prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="app-wrap">
+
+  <!-- Header -->
+  <header class="app-header pixel-box" style="margin-bottom:20px;border:none;">
+    <div class="header-logo">
+      <div class="logo-icon" id="logo-icon"></div>
+      <div>
+        <div class="header-title">PIXEL<span>SPLIT</span></div>
+        <div style="font-size:.55rem;color:#8A8078;margin-top:4px;font-family:'IBM Plex Mono',monospace;">sprite sheet extractor</div>
+      </div>
+    </div>
+    <button class="settings-btn" id="settings-toggle" aria-label="Open settings">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 011.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.56.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.893.149c-.425.07-.765.383-.93.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 01-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.397.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 01-.12-1.45l.527-.737c.25-.35.273-.806.108-1.204-.165-.397-.505-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.107-1.204l-.527-.738a1.125 1.125 0 01.12-1.45l.773-.773a1.125 1.125 0 011.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+      CONFIG
+      <span class="settings-pill" id="threshold-display">α:10% 30px</span>
+    </button>
+  </header>
+
+  <!-- Drop Zone -->
+  <div id="drop-zone" class="drop-zone" role="button" tabindex="0" aria-label="Upload sprite sheet">
+    <input type="file" id="fileInput" accept="image/png,image/webp,image/jpeg,image/jpg,image/gif,image/bmp,image/tiff,image/svg+xml,.zip,application/zip" multiple>
+
+    <div id="upload-prompt">
+      <svg class="drop-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9 8.25H7.5a2.25 2.25 0 00-2.25 2.25v9a2.25 2.25 0 002.25 2.25h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25H15m0-3l-3-3m0 0l-3 3m3-3V15"/>
+      </svg>
+      <div class="drop-title"><span>DROP YOUR SPRITE SHEET</span><br>or click to browse files</div>
+      <div class="drop-sub">PNG · JPG · WEBP · GIF · BMP · TIFF · SVG · ZIP</div>
+    </div>
+
+    <div class="preview-container" id="preview-container">
+      <div class="preview-images" id="preview-images"></div>
+    </div>
+
+    <div class="status-bar" id="status">Ready — awaiting sprite sheet</div>
+  </div>
+
+  <!-- Loader -->
+  <div class="loader-wrap" id="loader">
+    <div class="pixel-loader" id="pixel-loader"></div>
+    <div class="loader-label">EXTRACTING SPRITES...</div>
+  </div>
+
+  <!-- Output -->
+  <section class="output-section" id="output-container">
+    <div class="output-header">
+      <div class="output-title">
+        SPRITES FOUND
+        <span class="count-badge" id="sprite-count">0</span>
+      </div>
+      <div class="action-buttons" id="action-buttons">
+        <button class="btn btn-primary" id="download-all-btn">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
+          DOWNLOAD ALL (.ZIP)
+        </button>
+      </div>
+    </div>
+    <div class="sprite-grid" id="output"></div>
+  </section>
+
+</div>
+
+<!-- Settings Panel -->
+<div class="settings-overlay" id="settings-overlay"></div>
+<aside class="settings-panel" id="settings-panel" role="dialog" aria-label="Settings">
+  <div class="settings-header">
+    <h2>⚙ CONFIG</h2>
+    <button class="close-panel-btn" id="close-settings-btn" aria-label="Close settings">✕</button>
+  </div>
+  <div class="settings-body">
+
+    <!-- Alpha threshold (hidden for opaque) -->
+    <div class="setting-group" id="alpha-section">
+      <div class="setting-label">
+        Alpha Threshold
+        <span class="setting-value" id="threshold-value-modal">10%</span>
+      </div>
+      <input type="range" id="alpha-threshold-modal" min="0" max="100" value="10">
+      <div class="range-labels"><span>0% all pixels</span><span>100% opaque only</span></div>
+      <div class="setting-hint">Pixels below this alpha are treated as transparent background.</div>
+    </div>
+
+    <!-- BG color (shown for opaque) -->
+    <div class="setting-group hidden" id="bg-color-section">
+      <div class="setting-label">
+        Background Color
+        <span class="setting-value" id="bg-color-value-modal">#000000</span>
+      </div>
+      <div class="color-row">
+        <input type="color" id="background-color-picker-modal" value="#000000">
+        <button class="btn-sm" id="pick-color-btn-modal">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15 11.25l1.5 1.5.75-.75V8.758l2.276-.61a3 3 0 10-3.675-3.675l-.61 2.277H12l-.75.75 1.5 1.5M15 11.25l-8.47 8.47c-.34.34-.8.53-1.28.53s-.94-.19-1.28-.53l-.97-.97-.97-.97c-.34-.34-.53-.8-.53-1.28s.19-.94.53-1.28L10.75 9 15 11.25z"/></svg>
+          PICK FROM IMAGE
+        </button>
+      </div>
+      <div class="setting-hint">Colors matching this will be treated as background.</div>
+    </div>
+
+    <!-- Extraction mode -->
+    <div class="setting-group">
+      <div class="setting-label">Extraction Mode</div>
+      <div class="radio-group">
+        <label class="radio-option">
+          <input type="radio" name="extraction-mode" value="shape" checked>
+          <span>Exact Shape — pixel-perfect cutout</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="extraction-mode" value="bounding-box">
+          <span>Bounding Box — rectangular crop</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Min size -->
+    <div class="setting-group">
+      <div class="setting-label">
+        Minimum Size
+        <span class="setting-value" id="min-size-value-modal">30×30</span>
+      </div>
+      <input type="range" id="min-size-modal" min="1" max="100" value="10">
+      <div class="range-labels"><span>1px keep all</span><span>100px large only</span></div>
+      <div class="setting-hint">Sprites smaller than this threshold are discarded as noise.</div>
+    </div>
+
+  </div>
+  <div class="settings-footer">
+    <button class="btn-cancel" id="cancel-settings-btn">CANCEL</button>
+    <button class="btn-apply" id="apply-settings-btn">▶ APPLY &amp; RERUN</button>
+  </div>
+</aside>
+
+<!-- Color Picker Modal -->
+<div class="modal-overlay" id="color-picker-modal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3>🎨 PICK BACKGROUND COLOR</h3>
+      <button class="close-panel-btn" id="close-modal-btn">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:.65rem;color:var(--ink2);margin-bottom:12px;">Click any pixel on your image to sample its color as the background:</p>
+      <canvas id="color-picker-canvas"></canvas>
+      <div class="modal-footer">
+        <div class="picked-color-row">
+          <div class="color-preview-box" id="color-preview"></div>
+          <span class="picked-hex" id="selected-color-text">#000000</span>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-cancel" id="cancel-color-btn" style="min-width:80px;">BACK</button>
+          <button class="btn-apply" id="confirm-color-btn" style="min-width:120px;">USE COLOR</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+// ── DOM Refs ──────────────────────────────────────────────
+const statusEl               = document.getElementById('status');
+const fileInputEl            = document.getElementById('fileInput');
+const loaderEl               = document.getElementById('loader');
+const outputContainerEl      = document.getElementById('output-container');
+const outputEl               = document.getElementById('output');
+const spriteCountEl          = document.getElementById('sprite-count');
+const dropZoneEl             = document.getElementById('drop-zone');
+const downloadAllBtn         = document.getElementById('download-all-btn');
+const actionButtonsEl        = document.getElementById('action-buttons');
+const settingsToggle         = document.getElementById('settings-toggle');
+const thresholdDisplay       = document.getElementById('threshold-display');
+const uploadPromptEl         = document.getElementById('upload-prompt');
+const previewContainerEl     = document.getElementById('preview-container');
+const previewImagesEl        = document.getElementById('preview-images');
+
+// Settings panel
+const settingsOverlay        = document.getElementById('settings-overlay');
+const settingsPanel          = document.getElementById('settings-panel');
+const closeSettingsBtn       = document.getElementById('close-settings-btn');
+const cancelSettingsBtn      = document.getElementById('cancel-settings-btn');
+const applySettingsBtn       = document.getElementById('apply-settings-btn');
+const alphaSlider            = document.getElementById('alpha-threshold-modal');
+const alphaValueEl           = document.getElementById('threshold-value-modal');
+const minSizeSlider          = document.getElementById('min-size-modal');
+const minSizeValueEl         = document.getElementById('min-size-value-modal');
+const bgColorPicker          = document.getElementById('background-color-picker-modal');
+const bgColorValueEl         = document.getElementById('bg-color-value-modal');
+const pickColorBtn           = document.getElementById('pick-color-btn-modal');
+const alphaSectionEl         = document.getElementById('alpha-section');
+const bgColorSectionEl       = document.getElementById('bg-color-section');
+
+// Color picker modal
+const colorPickerModal       = document.getElementById('color-picker-modal');
+const colorPickerCanvas      = document.getElementById('color-picker-canvas');
+const colorPreviewEl         = document.getElementById('color-preview');
+const selectedColorText      = document.getElementById('selected-color-text');
+const closeModalBtn          = document.getElementById('close-modal-btn');
+const cancelColorBtn         = document.getElementById('cancel-color-btn');
+const confirmColorBtn        = document.getElementById('confirm-color-btn');
+
+// ── State ─────────────────────────────────────────────────
+let alphaThreshold    = 10;
+let minSize           = 30;
+let backgroundColor   = '#000000';
+let extractionMode    = 'shape';
+let extractedCanvases = [];
+let currentImageEl    = null;
+let isImageOpaque     = false;
+let selectedColor     = '#000000';
+
+// ── Logo pixel art init ───────────────────────────────────
+(function initLogo() {
+  const icon  = document.getElementById('logo-icon');
+  const pat   = [0,1,1,1,0, 1,0,0,0,1, 1,0,1,0,1, 1,0,0,0,1, 0,1,1,1,0];
+  pat.forEach(v => {
+    const d = document.createElement('div');
+    d.className = 'logo-px' + (v ? '' : ' lit');
+    icon.appendChild(d);
+  });
+})();
+
+// ── Pixel loader cells ────────────────────────────────────
+(function initLoader() {
+  const pl = document.getElementById('pixel-loader');
+  for (let i = 0; i < 25; i++) {
+    const c = document.createElement('div');
+    c.className = 'cell';
+    pl.appendChild(c);
+  }
+})();
+
+// ── Settings: open/close ──────────────────────────────────
+function openSettings() {
+  // Sync modal with current state
+  alphaSlider.value      = alphaThreshold;
+  alphaValueEl.textContent = `${alphaThreshold}%`;
+  minSizeSlider.value    = minSize;
+  minSizeValueEl.textContent = `${minSize}×${minSize}`;
+  bgColorPicker.value    = backgroundColor;
+  bgColorValueEl.textContent = backgroundColor;
+  document.querySelectorAll('input[name="extraction-mode"]')
+    .forEach(r => r.checked = r.value === extractionMode);
+
+  if (isImageOpaque) {
+    alphaSectionEl.classList.add('hidden');
+    bgColorSectionEl.classList.remove('hidden');
+  } else {
+    alphaSectionEl.classList.remove('hidden');
+    bgColorSectionEl.classList.add('hidden');
+  }
+
+  settingsOverlay.classList.add('active');
+  settingsPanel.classList.add('active');
+}
+
+function closeSettings() {
+  settingsOverlay.classList.remove('active');
+  settingsPanel.classList.remove('active');
+}
+
+settingsToggle.addEventListener('click', openSettings);
+closeSettingsBtn.addEventListener('click', closeSettings);
+cancelSettingsBtn.addEventListener('click', closeSettings);
+settingsOverlay.addEventListener('click', closeSettings);
+
+// Live slider labels
+alphaSlider.addEventListener('input',   e => alphaValueEl.textContent   = `${e.target.value}%`);
+minSizeSlider.addEventListener('input', e => minSizeValueEl.textContent  = `${e.target.value}×${e.target.value}`);
+bgColorPicker.addEventListener('input', e => bgColorValueEl.textContent  = e.target.value);
+
+applySettingsBtn.addEventListener('click', () => {
+  alphaThreshold  = parseInt(alphaSlider.value);
+  minSize         = parseInt(minSizeSlider.value);
+  backgroundColor = bgColorPicker.value;
+  extractionMode  = document.querySelector('input[name="extraction-mode"]:checked').value || 'shape';
+  updateSettingsDisplay();
+  closeSettings();
+  if (currentImageEl) reprocessImage();
+});
+
+function updateSettingsDisplay() {
+  thresholdDisplay.textContent = isImageOpaque
+    ? `BG:${backgroundColor} ${minSize}px`
+    : `α:${alphaThreshold}% ${minSize}px`;
+}
+
+// ── Color Picker Modal ────────────────────────────────────
+function openColorPicker() {
+  const ctx = colorPickerCanvas.getContext('2d');
+  colorPickerCanvas.width  = currentImageEl.naturalWidth;
+  colorPickerCanvas.height = currentImageEl.naturalHeight;
+  ctx.drawImage(currentImageEl, 0, 0);
+  selectedColor = backgroundColor;
+  updateColorPreview(selectedColor);
+  colorPickerModal.classList.add('active');
+}
+function closeColorPicker() { colorPickerModal.classList.remove('active'); }
+function updateColorPreview(color) {
+  colorPreviewEl.style.backgroundColor = color;
+  selectedColorText.textContent = color;
+}
+
+pickColorBtn.addEventListener('click', () => { closeSettings(); openColorPicker(); });
+closeModalBtn.addEventListener('click', closeColorPicker);
+cancelColorBtn.addEventListener('click', () => { closeColorPicker(); openSettings(); });
+colorPickerModal.addEventListener('click', e => { if (e.target === colorPickerModal) closeColorPicker(); });
+
+colorPickerCanvas.addEventListener('click', e => {
+  const rect  = colorPickerCanvas.getBoundingClientRect();
+  const scaleX = colorPickerCanvas.width  / rect.width;
+  const scaleY = colorPickerCanvas.height / rect.height;
+  const x = Math.floor((e.clientX - rect.left) * scaleX);
+  const y = Math.floor((e.clientY - rect.top)  * scaleY);
+  const px = colorPickerCanvas.getContext('2d').getImageData(x, y, 1, 1).data;
+  selectedColor = `#${px[0].toString(16).padStart(2,'0')}${px[1].toString(16).padStart(2,'0')}${px[2].toString(16).padStart(2,'0')}`;
+  updateColorPreview(selectedColor);
+});
+
+confirmColorBtn.addEventListener('click', () => {
+  backgroundColor = selectedColor;
+  bgColorPicker.value = selectedColor;
+  bgColorValueEl.textContent = selectedColor;
+  updateSettingsDisplay();
+  closeColorPicker();
+  openSettings();
+});
+
+// ── File Input & Drag/Drop ────────────────────────────────
+fileInputEl.addEventListener('change', e => {
+  if (e.target.files.length) handleFiles(e.target.files);
+  else clearPreviews();
+});
+dropZoneEl.addEventListener('dragover',  e => { e.preventDefault(); dropZoneEl.classList.add('drag-over'); });
+dropZoneEl.addEventListener('dragleave', () => dropZoneEl.classList.remove('drag-over'));
+dropZoneEl.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZoneEl.classList.remove('drag-over');
+  handleFiles(e.dataTransfer.files);
+});
+downloadAllBtn.addEventListener('click', downloadAllAsZip);
+
+// ── File Handling ─────────────────────────────────────────
+async function handleFiles(files) {
+  if (!files.length) return;
+  showImagePreviews(files);
+  loaderEl.classList.remove('hidden');
+  loaderEl.style.display = 'flex';
+  outputContainerEl.style.display = 'none';
+  actionButtonsEl.style.display = 'none';
+  outputEl.innerHTML = '';
+  extractedCanvases = [];
+
+  let total = 0;
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    setStatus(`Processing ${i + 1}/${files.length}: ${f.name}`);
+    if (f.type.startsWith('image/')) total += await processImageFile(f);
+    else if (f.type === 'application/zip' || f.name.endsWith('.zip')) total += await processZipFile(f);
+  }
+
+  spriteCountEl.textContent = total;
+  loaderEl.style.display = 'none';
+  if (total > 0) {
+    outputContainerEl.style.display = 'block';
+    actionButtonsEl.style.display = 'flex';
+  }
+  setStatus(`Done! ${total} sprite${total !== 1 ? 's' : ''} extracted from ${files.length} file${files.length !== 1 ? 's' : ''}.`, total === 0);
+}
+
+function showImagePreviews(files) {
+  previewImagesEl.innerHTML = '';
+  const imgs = Array.from(files).filter(f => f.type.startsWith('image/'));
+  if (!imgs.length) { uploadPromptEl.classList.remove('hidden'); previewContainerEl.style.display = 'none'; return; }
+  uploadPromptEl.classList.add('hidden');
+  previewContainerEl.style.display = 'block';
+  const single = imgs.length === 1;
+  imgs.forEach(f => {
+    const img = document.createElement('img');
+    img.src = URL.createObjectURL(f);
+    img.style.cssText = single ? 'max-width:400px;max-height:300px;' : 'max-width:80px;max-height:80px;';
+    img.style.border = '2px solid var(--border2)';
+    previewImagesEl.appendChild(img);
+  });
+}
+
+function clearPreviews() {
+  uploadPromptEl.classList.remove('hidden');
+  previewContainerEl.style.display = 'none';
+  previewImagesEl.innerHTML = '';
+}
+
+async function processZipFile(zipFile) {
+  setStatus(`Unpacking ${zipFile.name}...`);
+  try {
+    const zip = await JSZip.loadAsync(zipFile);
+    const promises = [];
+    zip.forEach((path, entry) => {
+      if (/\.(png|jpe?g|webp|gif|bmp|tiff?|svg)$/i.test(entry.name) && !entry.dir) {
+        promises.push(entry.async('blob').then(blob =>
+          processImageFile(new File([blob], entry.name, { type: blob.type }))
+        ));
+      }
+    });
+    const counts = await Promise.all(promises);
+    return counts.reduce((a, b) => a + b, 0);
+  } catch {
+    setStatus(`Could not process ${zipFile.name}`, true);
+    return 0;
+  }
+}
+
+function processImageFile(file) {
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.src = e.target.result;
+      img.onload = () => {
+        checkTransparency(img);
+        resolve(segmentImage(img));
+      };
+      img.onerror = () => resolve(0);
+    };
+    reader.onerror = () => resolve(0);
+    reader.readAsDataURL(file);
+  });
+}
+
+// ── Core Segmentation ─────────────────────────────────────
+function checkTransparency(imgEl) {
+  const c = document.createElement('canvas');
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  c.width = imgEl.width; c.height = imgEl.height;
+  ctx.drawImage(imgEl, 0, 0);
+  const px = ctx.getImageData(0, 0, c.width, c.height).data;
+  currentImageEl = imgEl;
+  isImageOpaque = true;
+  for (let i = 3; i < px.length; i += 4) {
+    if (px[i] < 255) { isImageOpaque = false; break; }
+  }
+  if (isImageOpaque) {
+    backgroundColor = `#${px[0].toString(16).padStart(2,'0')}${px[1].toString(16).padStart(2,'0')}${px[2].toString(16).padStart(2,'0')}`;
+  }
+  updateSettingsDisplay();
+}
+
+function segmentImage(imgEl) {
+  try {
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    c.width = imgEl.width; c.height = imgEl.height;
+    ctx.drawImage(imgEl, 0, 0);
+    const imageData = ctx.getImageData(0, 0, c.width, c.height);
+    const W = c.width, H = c.height;
+
+    const segMap = isImageOpaque
+      ? makeColorSegMap(imageData.data, W, H)
+      : makeAlphaSegMap(imageData.data, Math.floor(alphaThreshold / 100 * 255));
+
+    if (!segMap.some(v => v)) return 0;
+
+    const visited = new Uint8Array(W * H);
+    const sprites  = [];
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const idx = y * W + x;
+        if (segMap[idx] && !visited[idx]) {
+          sprites.push(floodFill(segMap, visited, x, y, W, H));
+        }
+      }
+    }
+
+    let count = 0;
+    sprites.forEach((bounds, si) => {
+      if (bounds.width < minSize || bounds.height < minSize) return;
+      const sc = document.createElement('canvas');
+      sc.className = 'sprite-canvas';
+      sc.width = bounds.width; sc.height = bounds.height;
+      if (extractionMode === 'shape') extractShape(c, sc, bounds, W);
+      else extractBox(c, sc, bounds);
+      extractedCanvases.push(sc);
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'sprite-wrapper';
+      wrapper.style.animationDelay = `${Math.min(si, 30) * 40}ms`;
+
+      const dlBtn = document.createElement('a');
+      dlBtn.className = 'dl-sprite-btn';
+      dlBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>`;
+      dlBtn.href = sc.toDataURL('image/png');
+      dlBtn.download = `sprite_${extractedCanvases.length}.png`;
+      dlBtn.title = 'Download sprite';
+
+      wrapper.appendChild(sc);
+      wrapper.appendChild(dlBtn);
+      outputEl.appendChild(wrapper);
+      count++;
+    });
+    return count;
+  } catch (err) {
+    console.error(err);
+    setStatus('Error during segmentation.', true);
+    return 0;
+  }
+}
+
+function makeAlphaSegMap(px, threshold) {
+  const m = new Uint8Array(px.length / 4);
+  for (let i = 0; i < px.length; i += 4) m[i/4] = px[i+3] > threshold ? 1 : 0;
+  return m;
+}
+
+function makeColorSegMap(px, W, H) {
+  const m = new Uint8Array(W * H);
+  const bg = hexToRgb(backgroundColor);
+  const tol = 30;
+  for (let i = 0; i < px.length; i += 4) {
+    const dr = px[i]-bg.r, dg = px[i+1]-bg.g, db = px[i+2]-bg.b;
+    m[i/4] = Math.sqrt(dr*dr + dg*dg + db*db) > tol ? 1 : 0;
+  }
+  return m;
+}
+
+function hexToRgb(hex) {
+  const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return r ? { r: parseInt(r[1],16), g: parseInt(r[2],16), b: parseInt(r[3],16) } : {r:0,g:0,b:0};
+}
+
+function floodFill(map, visited, sx, sy, W, H) {
+  const stack = [[sx, sy]];
+  let minX=sx, maxX=sx, minY=sy, maxY=sy;
+  const pixels = new Set();
+  while (stack.length) {
+    const [x, y] = stack.pop();
+    if (x<0||x>=W||y<0||y>=H) continue;
+    const idx = y*W+x;
+    if (visited[idx] || !map[idx]) continue;
+    visited[idx] = 1;
+    pixels.add(idx);
+    if (x<minX) minX=x; if (x>maxX) maxX=x;
+    if (y<minY) minY=y; if (y>maxY) maxY=y;
+    stack.push([x+1,y],[x-1,y],[x,y+1],[x,y-1]);
+  }
+  return { x:minX, y:minY, width:maxX-minX+1, height:maxY-minY+1, pixels };
+}
+
+function extractShape(src, tgt, bounds, srcW) {
+  const sCtx = src.getContext('2d');
+  const tCtx = tgt.getContext('2d');
+  const sData = sCtx.getImageData(bounds.x, bounds.y, bounds.width, bounds.height);
+  const tData = tCtx.createImageData(bounds.width, bounds.height);
+  for (let y=0; y<bounds.height; y++) {
+    for (let x=0; x<bounds.width; x++) {
+      const si = (bounds.y+y)*srcW + (bounds.x+x);
+      if (bounds.pixels.has(si)) {
+        const pi = (y*bounds.width+x)*4;
+        tData.data[pi]   = sData.data[pi];
+        tData.data[pi+1] = sData.data[pi+1];
+        tData.data[pi+2] = sData.data[pi+2];
+        tData.data[pi+3] = sData.data[pi+3];
+      }
+    }
+  }
+  tCtx.putImageData(tData, 0, 0);
+}
+
+function extractBox(src, tgt, bounds) {
+  tgt.getContext('2d').drawImage(src, bounds.x, bounds.y, bounds.width, bounds.height, 0, 0, bounds.width, bounds.height);
+}
+
+// ── Reprocess ─────────────────────────────────────────────
+function reprocessImage() {
+  if (!currentImageEl) return;
+  outputEl.innerHTML = '';
+  extractedCanvases = [];
+  loaderEl.style.display = 'flex';
+  outputContainerEl.style.display = 'none';
+  actionButtonsEl.style.display = 'none';
+  setStatus('Reprocessing with new settings...');
+  setTimeout(() => {
+    const n = segmentImage(currentImageEl);
+    spriteCountEl.textContent = n;
+    loaderEl.style.display = 'none';
+    if (n > 0) {
+      outputContainerEl.style.display = 'block';
+      actionButtonsEl.style.display = 'flex';
+      setStatus(`Done! ${n} sprite${n!==1?'s':''} found.`);
+    } else {
+      setStatus('No sprites found — try adjusting settings.', true);
+    }
+  }, 50);
+}
+
+// ── Download All ──────────────────────────────────────────
+function downloadAllAsZip() {
+  if (!extractedCanvases.length) return;
+  setStatus('Packing into ZIP...');
+  const zip = new JSZip();
+  extractedCanvases.forEach((c, i) => {
+    zip.file(`sprite_${i+1}.png`, c.toDataURL('image/png').split(',')[1], { base64: true });
+  });
+  zip.generateAsync({ type: 'blob' }).then(blob => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `pixelsplit_sprites_${Date.now()}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+    setStatus('ZIP downloaded!');
+  }).catch(() => setStatus('Failed to create ZIP.', true));
+}
+
+// ── Helpers ───────────────────────────────────────────────
+function setStatus(msg, warn=false) {
+  statusEl.style.color = warn ? 'var(--red)' : '';
+  statusEl.textContent = msg;
+  if (isImageOpaque && msg.toLowerCase().includes('done')) {
+    statusEl.innerHTML = msg + '<span class="warn-tag">⚠ Tip: opaque images work best with background removed first.</span>';
+  }
+}
+</script>
+</body>
+</html>
