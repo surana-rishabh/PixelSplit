@@ -11,8 +11,9 @@ A lightweight, browser-based tool that extracts individual sprites from sprite s
 - **No backend** — everything runs in the browser via Canvas API
 
 ## Usage
-
+Use this https://surana-rishabh.github.io/PixelSplit/ or 
 Just open `sprite-extractor.html` in any modern browser. No build step, no dependencies to install.
+
 
 ```bash
 # Or serve it locally if you prefer
