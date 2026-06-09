@@ -49,6 +49,4 @@ npx serve .
 
 Single HTML file. Vanilla JS, Canvas API, and [JSZip](https://stuk.github.io/jszip/) (loaded from CDN) for ZIP input/output.
 
-## License
-
-MIT
+THANKYOU FOR USING THIS!!
